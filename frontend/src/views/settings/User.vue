@@ -17,6 +17,13 @@
           />
         </div>
 
+        <div
+          class="card-content"
+          v-if="user && !isNew && user.id !== 0 && authMethod === 'json'"
+        >
+          <totp-form :user="user" @changed="reloadUser" />
+        </div>
+
         <div class="card-action">
           <button
             v-if="!isNew"
@@ -53,12 +60,13 @@ import { useAuthStore } from "@/stores/auth";
 import { useLayoutStore } from "@/stores/layout";
 import { users as api, settings } from "@/api";
 import UserForm from "@/components/settings/UserForm.vue";
+import TotpForm from "@/components/settings/TotpForm.vue";
 import Errors from "@/views/Errors.vue";
 import { computed, inject, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { StatusError } from "@/api/utils";
-import { authMethod } from "@/utils/constants";
+import { authMethod as configuredAuthMethod } from "@/utils/constants";
 import { logout } from "@/utils/auth";
 
 const error = ref<StatusError>();
@@ -66,6 +74,7 @@ const originalUser = ref<IUser>();
 const user = ref<IUser>();
 const createUserDir = ref<boolean>(false);
 const isCurrentPasswordRequired = ref<boolean>(false);
+const authMethod = ref<string>(configuredAuthMethod);
 
 const $showError = inject<IToastError>("$showError")!;
 const $showSuccess = inject<IToastSuccess>("$showSuccess")!;
@@ -94,7 +103,7 @@ const fetchData = async () => {
   try {
     if (isNew.value) {
       const { defaults, createUserDir: _createUserDir } = await settings.get();
-      isCurrentPasswordRequired.value = authMethod == "json";
+      isCurrentPasswordRequired.value = authMethod.value == "json";
       createUserDir.value = _createUserDir;
       user.value = {
         ...defaults,
@@ -105,8 +114,9 @@ const fetchData = async () => {
         id: 0,
       };
     } else {
-      const { authMethod } = await settings.get();
-      isCurrentPasswordRequired.value = authMethod == "json";
+      const { authMethod: fetchedAuthMethod } = await settings.get();
+      authMethod.value = fetchedAuthMethod;
+      isCurrentPasswordRequired.value = fetchedAuthMethod == "json";
       const id = Array.isArray(route.params.id)
         ? route.params.id.join("")
         : route.params.id;
@@ -119,6 +129,14 @@ const fetchData = async () => {
   } finally {
     layoutStore.loading = false;
   }
+};
+
+const reloadUser = async () => {
+  if (!user.value || user.value.id === 0) {
+    return;
+  }
+  const id = user.value.id;
+  user.value = { ...(await api.get(id)) };
 };
 
 const deletePrompt = () => {

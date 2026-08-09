@@ -68,7 +68,7 @@ filebrowser [flags]
   -l, --log string                     log output (default "stdout")
       --noauth                         use the noauth auther when using quick setup
       --password string                hashed password for the first user when using quick setup
-  -p, --port string                    port to listen on (default "8080")
+  -p, --port string                    port to listen on (default "15012")
       --redisCacheUrl string           redis cache URL (for multi-instance deployments), e.g. redis://user:pass@host:port
   -r, --root string                    root to prepend to relative paths (default ".")
       --socket string                  socket to listen to (cannot be used with address, port, cert nor key flags)

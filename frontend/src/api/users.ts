@@ -53,3 +53,29 @@ export async function remove(
     }),
   });
 }
+
+export interface ITOTPEnrollResult {
+  secret: string;
+  keyUrl: string;
+  issuer: string;
+  account: string;
+}
+
+export async function totpEnroll(id: number) {
+  return fetchJSON<ITOTPEnrollResult>(`/api/users/${id}/totp/enroll`, {
+    method: "POST",
+  });
+}
+
+export async function totpVerify(id: number, secret: string, code: string) {
+  await fetchURL(`/api/users/${id}/totp/verify`, {
+    method: "POST",
+    body: JSON.stringify({ secret, code }),
+  });
+}
+
+export async function totpDisable(id: number) {
+  await fetchURL(`/api/users/${id}/totp/disable`, {
+    method: "POST",
+  });
+}

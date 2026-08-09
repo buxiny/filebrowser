@@ -7,6 +7,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/pquerna/otp/totp"
+
+	fberrors "github.com/filebrowser/filebrowser/v2/errors"
 	"github.com/filebrowser/filebrowser/v2/settings"
 	"github.com/filebrowser/filebrowser/v2/users"
 )
@@ -22,6 +25,7 @@ type jsonCred struct {
 	Password  string `json:"password"`
 	Username  string `json:"username"`
 	ReCaptcha string `json:"recaptcha"`
+	TOTP      string `json:"totp"`
 }
 
 // JSONAuth is a json implementation of an Auther.
@@ -30,7 +34,7 @@ type JSONAuth struct {
 }
 
 // Auth authenticates the user via a json in content body.
-func (a JSONAuth) Auth(r *http.Request, usr users.Store, _ *settings.Settings, srv *settings.Server) (*users.User, error) {
+func (a JSONAuth) Auth(r *http.Request, usr users.Store, stg *settings.Settings, srv *settings.Server) (*users.User, error) {
 	var cred jsonCred
 
 	if r.Body == nil {
@@ -68,6 +72,26 @@ func (a JSONAuth) Auth(r *http.Request, usr users.Store, _ *settings.Settings, s
 
 	if err != nil {
 		return nil, os.ErrPermission
+	}
+
+	// If the user has TOTP enabled, require a valid code on top of the
+	// password. A missing code is reported as ErrTOTPRequired so the API can
+	// answer 428 and let the client perform the second step; a wrong code
+	// degrades to the same error as a wrong password to avoid user
+	// enumeration.
+	if u.TOTPEnabled && u.TOTPSecret != "" {
+		secret, derr := users.DecryptTOTPSecret(u.TOTPSecret, stg.Key)
+		if derr != nil {
+			return nil, os.ErrPermission
+		}
+
+		if cred.TOTP == "" {
+			return nil, fberrors.ErrTOTPRequired
+		}
+
+		if !totp.Validate(cred.TOTP, secret) {
+			return nil, os.ErrPermission
+		}
 	}
 
 	return u, nil

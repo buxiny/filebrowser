@@ -168,6 +168,11 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 		switch {
 		case errors.Is(err, os.ErrPermission):
 			return http.StatusForbidden, nil
+		case errors.Is(err, fberrors.ErrTOTPRequired):
+			// The credentials are valid but a second factor (TOTP) is
+			// required. Answer 428 so the client can collect the code and
+			// retry in a second step.
+			return http.StatusPreconditionRequired, nil
 		case err != nil:
 			return http.StatusInternalServerError, err
 		}

@@ -16,6 +16,7 @@ require (
 	github.com/marusama/semaphore/v2 v2.5.0
 	github.com/mholt/archives v0.1.5
 	github.com/mitchellh/go-homedir v1.1.0
+	github.com/pquerna/otp v1.5.0
 	github.com/redis/go-redis/v9 v9.21.0
 	github.com/samber/lo v1.53.0
 	github.com/shirou/gopsutil/v4 v4.26.6
@@ -41,6 +42,7 @@ require (
 	github.com/bodgit/plumbing v1.3.0 // indirect
 	github.com/bodgit/sevenzip v1.6.5 // indirect
 	github.com/bodgit/windows v1.0.1 // indirect
+	github.com/boombuler/barcode v1.0.1-0.20190219062509-6c824513bacc // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect

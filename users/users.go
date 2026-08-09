@@ -36,6 +36,8 @@ type User struct {
 	HideDotfiles          bool          `json:"hideDotfiles"`
 	DateFormat            bool          `json:"dateFormat"`
 	AceEditorTheme        string        `json:"aceEditorTheme"`
+	TOTPSecret            string        `json:"totpSecret,omitempty"`
+	TOTPEnabled           bool          `json:"totpEnabled"`
 }
 
 // GetRules implements rules.Provider.

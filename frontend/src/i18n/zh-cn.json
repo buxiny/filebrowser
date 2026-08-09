@@ -126,7 +126,10 @@
     "passwordTooShort": "密码长度至少为 {min} 位字符",
     "logout_reasons": {
       "inactivity": "因长时间未操作，系统已自动登出."
-    }
+    },
+    "enterTotp": "该账号已开启二次验证，请输入身份验证器应用中的验证码。",
+    "totp": "身份验证器验证码",
+    "submitTotp": "验证"
   },
   "permanent": "永久",
   "prompts": {
@@ -283,7 +286,17 @@
     "userUpdated": "用户信息已更新！",
     "username": "用户名",
     "users": "用户",
-    "currentPassword": "当前密码"
+    "currentPassword": "当前密码",
+    "totpTitle": "二次验证（TOTP）",
+    "totpEnable": "开启",
+    "totpScanHint": "使用身份验证器应用（Google Authenticator、1Password 等）扫描此二维码，然后输入下方的 6 位验证码。",
+    "totpManualEntry": "无法扫描？请手动输入此密钥：",
+    "totpCodePlaceholder": "6 位验证码",
+    "totpConfirm": "验证并开启",
+    "totpEnabled": "该用户已开启二次验证。",
+    "totpDisable": "关闭",
+    "totpEnabledSuccess": "二次验证已开启。",
+    "totpDisabledSuccess": "二次验证已关闭。"
   },
   "sidebar": {
     "diskUsed": "已使用 {used} / 总容量 {total}",

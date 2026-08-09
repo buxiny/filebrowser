@@ -78,6 +78,7 @@ var usersGetHandler = withAdmin(func(w http.ResponseWriter, r *http.Request, d *
 
 	for _, u := range users {
 		u.Password = ""
+		u.TOTPSecret = ""
 	}
 
 	sort.Slice(users, func(i, j int) bool {
@@ -98,6 +99,7 @@ var userGetHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 	}
 
 	u.Password = ""
+	u.TOTPSecret = ""
 	if !d.user.Perm.Admin {
 		u.Scope = ""
 	}
