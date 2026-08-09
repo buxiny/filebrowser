@@ -1,18 +1,81 @@
 name: Build and push GHCR image
 
 # 构建 buxiny/filebrowser 自用镜像并推送 GitHub Container Registry (ghcr.io)。
-# 参考 hurlenko/filebrowser-docker 的设定（/data、/config、8080、FB_* 环境变量），
+# 参考 hurlenko/filebrowser-docker 的设定（/data、/config、FB_* 环境变量），
 # 但改为编译本 fork 源码（含 TOTP 二次验证），多架构推送。
+#
+# 触发方式：
+# - push 到 master：自动打 vYYYYMMDD_HHMM 格式 tag 并创建 Release（提交说明为自
+#   上一 tag 起的全部变更），随后构建镜像到 ghcr.io（tag + latest 双标签）。
+# - 手动 workflow_dispatch：仅重建镜像（复用最近一次 v* tag 作为版本号）。
 
 on:
   push:
-    tags:
-      - "v*"
     branches:
       - master
   workflow_dispatch:
 
 jobs:
+  release:
+    name: Auto tag & Release
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Compute tag
+        id: tag
+        run: |
+          TAG="v$(date -u +%Y%m%d_%H%M)"
+          # 若该分钟已存在同 tag（重复 push），追加序号避免冲突
+          if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+            for i in 1 2 3 4 5; do
+              CAND="${TAG}_$i"
+              if ! git ls-remote --tags origin "$CAND" | grep -q "$CAND"; then
+                TAG="$CAND"
+                break
+              fi
+            done
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create git tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.tag.outputs.tag }}"
+          git push origin "${{ steps.tag.outputs.tag }}"
+
+      - name: Build release notes
+        id: notes
+        run: |
+          PREV=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
+          if [ -n "$PREV" ]; then
+            RANGE="$PREV..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+          {
+            echo "## 本次变更"
+            git log --oneline --no-merges "$RANGE" | sed 's/^/- /'
+          } > release_notes.md
+          echo "range=$RANGE" >> "$GITHUB_OUTPUT"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+
   build-and-push:
     name: Build & push multi-arch image
     runs-on: ubuntu-24.04
@@ -26,18 +89,32 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Compute image tags
+      - name: Compute image version
         id: tags
         run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            TAG=${GITHUB_REF_NAME#v}
-            echo "version=$TAG" >> "$GITHUB_OUTPUT"
-            echo "tags=ghcr.io/buxiny/filebrowser:$TAG,ghcr.io/buxiny/filebrowser:latest" >> "$GITHUB_OUTPUT"
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            # 与 release job 保持一致：vYYYYMMDD_HHMM，同分钟冲突加后缀
+            TAG="v$(date -u +%Y%m%d_%H%M)"
+            if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
+              for i in 1 2 3 4 5; do
+                CAND="${TAG}_$i"
+                if ! git ls-remote --tags origin "$CAND" | grep -q "$CAND"; then
+                  TAG="$CAND"
+                  break
+                fi
+              done
+            fi
           else
-            SHA=${GITHUB_SHA::8}
-            echo "version=$SHA" >> "$GITHUB_OUTPUT"
-            echo "tags=ghcr.io/buxiny/filebrowser:$SHA" >> "$GITHUB_OUTPUT"
+            # workflow_dispatch: 复用最近一次 v* tag，无则用短 SHA
+            LAST=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            if [ -n "$LAST" ]; then
+              TAG="$LAST"
+            else
+              TAG="${GITHUB_SHA::8}"
+            fi
           fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "tags=ghcr.io/buxiny/filebrowser:${TAG},ghcr.io/buxiny/filebrowser:latest" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4

@@ -9,8 +9,11 @@
 ## builds the fork's own source, so fork-specific changes such as TOTP
 ## two-factor authentication are included.
 
-## First stage: build the frontend assets
-FROM node:24-alpine AS frontend
+## First stage: build the frontend assets.
+## node:24-alpine is only published for amd64/arm64 (no arm/v7), and the
+## frontend build output is platform-independent static files anyway, so pin
+## this stage to the build machine's platform.
+FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend
 
 WORKDIR /src/frontend
 
