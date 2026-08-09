@@ -57,7 +57,7 @@ type totpVerifyRequest struct {
 
 // totpVerifyHandler persists the pending TOTP secret once the user proves to
 // hold a valid authenticator code generated from it.
-var totpVerifyHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+var totpVerifyHandler = withSelfOrAdmin(func(_ http.ResponseWriter, r *http.Request, d *data) (int, error) {
 	if r.Body == nil {
 		return http.StatusBadRequest, fberrors.ErrEmptyRequest
 	}
@@ -93,7 +93,7 @@ var totpVerifyHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Requ
 
 // totpDisableHandler removes the TOTP secret and disables two-factor auth for
 // a user.
-var totpDisableHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+var totpDisableHandler = withSelfOrAdmin(func(_ http.ResponseWriter, _ *http.Request, d *data) (int, error) {
 	target, err := d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, d.raw.(uint))
 	if err != nil {
 		return errToStatus(err), err
