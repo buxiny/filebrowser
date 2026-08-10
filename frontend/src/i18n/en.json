@@ -127,8 +127,8 @@
     "logout_reasons": {
       "inactivity": "You have been logged out due to inactivity."
     },
-    "enterTotp": "Two-factor authentication is enabled for this account. Enter the code from your authenticator app.",
-    "totp": "Authenticator code",
+    "enterTotp": "Verification code",
+    "totp": "Verification code",
     "submitTotp": "Verify"
   },
   "permanent": "Permanent",

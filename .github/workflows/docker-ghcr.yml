@@ -31,8 +31,10 @@ jobs:
 
       - name: Compute tag
         id: tag
+        env:
+          TZ: Asia/Shanghai
         run: |
-          TAG="v$(date -u +%Y%m%d_%H%M)"
+          TAG="v$(date +%Y%m%d_%H%M)"
           # 若该分钟已存在同 tag（重复 push），追加序号避免冲突
           if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
             for i in 1 2 3 4 5; do
@@ -91,10 +93,12 @@ jobs:
 
       - name: Compute image version
         id: tags
+        env:
+          TZ: Asia/Shanghai
         run: |
           if [[ "${{ github.event_name }}" == "push" ]]; then
             # 与 release job 保持一致：vYYYYMMDD_HHMM，同分钟冲突加后缀
-            TAG="v$(date -u +%Y%m%d_%H%M)"
+            TAG="v$(date +%Y%m%d_%H%M)"
             if git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
               for i in 1 2 3 4 5; do
                 CAND="${TAG}_$i"
