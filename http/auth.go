@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	DefaultTokenExpirationTime = time.Hour * 2
+	DefaultTokenExpirationTime = 30 * time.Minute
 
 	maxAuthBodySize = 1 << 20 // 1 MiB
 )
@@ -136,7 +136,7 @@ func withUser(fn handleFunc) handleFunc {
 			return http.StatusUnauthorized, nil
 		}
 
-		expiresSoon := tk.ExpiresAt != nil && time.Until(tk.ExpiresAt.Time) < time.Hour
+		expiresSoon := tk.ExpiresAt != nil && time.Until(tk.ExpiresAt.Time) < 15*time.Minute
 		updated := tk.IssuedAt != nil && tk.IssuedAt.Unix() < d.store.Users.LastUpdate(tk.User.ID)
 
 		if expiresSoon || updated {

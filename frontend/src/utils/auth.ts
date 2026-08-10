@@ -12,7 +12,7 @@ export function parseToken(token: string) {
 
   document.cookie = `auth=${token}; Path=/; SameSite=Strict;`;
 
-  localStorage.setItem("jwt", token);
+  sessionStorage.setItem("jwt", token);
 
   const authStore = useAuthStore();
   authStore.jwt = token;
@@ -39,8 +39,8 @@ export function parseToken(token: string) {
 
 export async function validateLogin() {
   try {
-    if (localStorage.getItem("jwt")) {
-      await renew(<string>localStorage.getItem("jwt"));
+    if (sessionStorage.getItem("jwt")) {
+      await renew(<string>sessionStorage.getItem("jwt"));
     }
   } catch (error) {
     console.warn("Invalid JWT token in storage");
@@ -122,7 +122,7 @@ export function logout(reason?: string) {
   const authStore = useAuthStore();
   authStore.clearUser();
 
-  localStorage.setItem("jwt", "");
+  sessionStorage.setItem("jwt", "");
   if (noAuth) {
     window.location.reload();
   } else if (logoutPage !== "/login") {

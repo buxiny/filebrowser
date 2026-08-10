@@ -106,7 +106,7 @@ func addServerFlags(flags *pflag.FlagSet) {
 	flags.StringP("root", "r", ".", "root to prepend to relative paths")
 	flags.String("socket", "", "socket to listen to (cannot be used with address, port, cert nor key flags)")
 	flags.StringP("baseURL", "b", "", "base url")
-	flags.String("tokenExpirationTime", "2h", "user session timeout")
+	flags.String("tokenExpirationTime", "30m", "user session timeout")
 	flags.Bool("disableThumbnails", false, "disable image thumbnails")
 	flags.Bool("disablePreviewResize", false, "disable resize of image previews")
 	flags.Bool("disableExec", true, "disables Command Runner feature")
