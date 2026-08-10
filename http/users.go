@@ -13,7 +13,7 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
-	"github.com/filebrowser/filebrowser/v2/auth"
+	fbAuth "github.com/filebrowser/filebrowser/v2/auth"
 	fberrors "github.com/filebrowser/filebrowser/v2/errors"
 	"github.com/filebrowser/filebrowser/v2/users"
 )
@@ -79,6 +79,7 @@ var usersGetHandler = withAdmin(func(w http.ResponseWriter, r *http.Request, d *
 	for _, u := range users {
 		u.Password = ""
 		u.TOTPSecret = ""
+		u.Salt = ""
 	}
 
 	sort.Slice(users, func(i, j int) bool {
@@ -100,6 +101,7 @@ var userGetHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 
 	u.Password = ""
 	u.TOTPSecret = ""
+	u.Salt = ""
 	if !d.user.Perm.Admin {
 		u.Scope = ""
 	}
@@ -119,7 +121,7 @@ var userDeleteHandler = withSelfOrAdmin(func(_ http.ResponseWriter, r *http.Requ
 		return http.StatusBadRequest, err
 	}
 
-	if d.settings.AuthMethod == auth.MethodJSONAuth {
+	if d.settings.AuthMethod == fbAuth.MethodJSONAuth {
 		if !users.CheckPwd(body.CurrentPassword, d.user.Password) {
 			return http.StatusBadRequest, fberrors.ErrCurrentPasswordIncorrect
 		}
@@ -139,7 +141,7 @@ var userPostHandler = withAdmin(func(w http.ResponseWriter, r *http.Request, d *
 		return http.StatusBadRequest, err
 	}
 
-	if d.settings.AuthMethod == auth.MethodJSONAuth {
+	if d.settings.AuthMethod == fbAuth.MethodJSONAuth {
 		if !users.CheckPwd(req.CurrentPassword, d.user.Password) {
 			return http.StatusBadRequest, fberrors.ErrCurrentPasswordIncorrect
 		}
@@ -185,7 +187,7 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 		return http.StatusBadRequest, err
 	}
 
-	if d.settings.AuthMethod == auth.MethodJSONAuth {
+	if d.settings.AuthMethod == fbAuth.MethodJSONAuth {
 		var sensibleFields = map[string]struct{}{
 			"all":          {},
 			"username":     {},
@@ -210,6 +212,40 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 		return http.StatusBadRequest, nil
 	}
 
+	// Load the current target user: its salt and TOTP state drive the
+	// credential-change bookkeeping below, and an admin's username/password
+	// changes invalidate the derived JWT key.
+	target, err := d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, d.raw.(uint))
+	if err != nil {
+		return http.StatusInternalServerError, err
+	}
+
+	// Detect a password change while the new plaintext is still available,
+	// before the handler hashes it.
+	changesPassword := false
+	plainNewPwd := ""
+	if len(req.Which) == 0 || (len(req.Which) == 1 && strings.EqualFold(req.Which[0], "all")) {
+		changesPassword = req.Data.Password != ""
+		plainNewPwd = req.Data.Password
+	} else {
+		for _, f := range req.Which {
+			if strings.EqualFold(f, "password") {
+				changesPassword = true
+				plainNewPwd = req.Data.Password
+			}
+		}
+	}
+	changesUsername := false
+	if len(req.Which) == 0 || (len(req.Which) == 1 && strings.EqualFold(req.Which[0], "all")) {
+		changesUsername = req.Data.Username != "" && req.Data.Username != target.Username
+	} else {
+		for _, f := range req.Which {
+			if strings.EqualFold(f, "username") {
+				changesUsername = req.Data.Username != "" && req.Data.Username != target.Username
+			}
+		}
+	}
+
 	for _, field := range req.Which {
 		if strings.ToLower(field) == "perm" || strings.ToLower(field) == "all" {
 			if req.Data.Perm.Share && !req.Data.Perm.Download {
@@ -229,12 +265,7 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 				return http.StatusBadRequest, err
 			}
 		} else {
-			var suser *users.User
-			suser, err = d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, d.raw.(uint))
-			if err != nil {
-				return http.StatusInternalServerError, err
-			}
-			req.Data.Password = suser.Password
+			req.Data.Password = target.Password
 		}
 
 		req.Which = []string{}
@@ -260,6 +291,50 @@ var userPutHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Request
 				return http.StatusForbidden, nil
 			}
 		}
+	}
+
+	// Credential-change bookkeeping.
+	if changesPassword {
+		if d.user.ID == target.ID {
+			// Changing your own password: re-encrypt the TOTP secret with a
+			// key derived from the new password so two-factor stays usable.
+			// The old plaintext (req.CurrentPassword) was verified above for
+			// JSON auth, which is the only path that can re-derive the old
+			// key.
+			if target.TOTPEnabled && target.TOTPSecret != "" {
+				oldPlain := req.CurrentPassword
+				if d.settings.AuthMethod == fbAuth.MethodJSONAuth && oldPlain != "" && users.CheckPwd(oldPlain, target.Password) {
+					if secret, derr := users.DecryptTOTPSecret(target.TOTPSecret, users.DeriveTOTPKey(oldPlain, target.Salt)); derr == nil {
+						if enc, eerr := users.EncryptTOTPSecret(secret, users.DeriveTOTPKey(plainNewPwd, target.Salt)); eerr == nil {
+							req.Data.TOTPSecret = enc
+							req.Data.TOTPEnabled = true
+						}
+					}
+				}
+				// If the old key could not be derived (non-JSON auth), the
+				// secret is unrecoverable: TOTP must be re-enrolled.
+				if req.Data.TOTPSecret == "" {
+					req.Data.TOTPEnabled = false
+					req.Data.TOTPSecret = ""
+				}
+				req.Which = append(req.Which, "TOTPSecret", "TOTPEnabled")
+			}
+		} else {
+			// Admin resetting another user's password: the old password (and
+			// thus the old encryption key) is unknown, so the TOTP secret
+			// cannot be migrated. Disable TOTP; the user must re-enroll.
+			if target.TOTPEnabled {
+				req.Data.TOTPEnabled = false
+				req.Data.TOTPSecret = ""
+				req.Which = append(req.Which, "TOTPSecret", "TOTPEnabled")
+			}
+		}
+	}
+
+	// The JWT signing key is derived from the admin's username+password;
+	// changing either invalidates every outstanding token.
+	if target.Perm.Admin && (changesPassword || changesUsername) {
+		fbAuth.ClearJWTKey()
 	}
 
 	err = d.store.Users.Update(req.Data, req.Which...)

@@ -13,6 +13,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/spf13/afero"
 
+	fbAuth "github.com/filebrowser/filebrowser/v2/auth"
 	"github.com/filebrowser/filebrowser/v2/diskcache"
 	"github.com/filebrowser/filebrowser/v2/settings"
 	"github.com/filebrowser/filebrowser/v2/storage"
@@ -104,6 +105,12 @@ func TestResourceCopyDoesNotDereferenceEscapingSymlink(t *testing.T) {
 
 func signToken(t *testing.T, perm users.Permissions, key []byte) string {
 	t.Helper()
+
+	// withUser now resolves the signing key from the in-memory cache, so the
+	// test must mirror that: cache the key before signing so subsequent
+	// authenticated requests verify with the same key.
+	fbAuth.SetJWTKey(key)
+
 	claims := &authToken{
 		User: userInfo{ID: 1, Username: "u", Perm: perm},
 		RegisteredClaims: jwt.RegisteredClaims{

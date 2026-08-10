@@ -67,15 +67,21 @@ export async function totpEnroll(id: number) {
   });
 }
 
-export async function totpVerify(id: number, secret: string, code: string) {
+export async function totpVerify(
+  id: number,
+  secret: string,
+  code: string,
+  password: string
+) {
   await fetchURL(`/api/users/${id}/totp/verify`, {
     method: "POST",
-    body: JSON.stringify({ secret, code }),
+    body: JSON.stringify({ secret, code, password }),
   });
 }
 
-export async function totpDisable(id: number) {
+export async function totpDisable(id: number, password: string) {
   await fetchURL(`/api/users/${id}/totp/disable`, {
     method: "POST",
+    body: JSON.stringify({ password }),
   });
 }

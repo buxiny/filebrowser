@@ -292,6 +292,8 @@
     "totpScanHint": "使用身份验证器应用（Google Authenticator、1Password 等）扫描此二维码，然后输入下方的 6 位验证码。",
     "totpManualEntry": "无法扫描？请手动输入此密钥：",
     "totpCodePlaceholder": "6 位验证码",
+    "totpPasswordHint": "请输入当前登录密码以确认操作：",
+    "totpPasswordPlaceholder": "当前密码",
     "totpConfirm": "验证并开启",
     "totpEnabled": "该用户已开启二次验证。",
     "totpDisable": "关闭",

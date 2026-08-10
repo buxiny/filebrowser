@@ -38,6 +38,14 @@ type User struct {
 	AceEditorTheme        string        `json:"aceEditorTheme"`
 	TOTPSecret            string        `json:"totpSecret,omitempty"`
 	TOTPEnabled           bool          `json:"totpEnabled"`
+
+	// Salt is the per-user random key-derivation seed (hex, 32 bytes). It is
+	// not secret, but it must never be sent to clients: together with the
+	// plaintext password it is what derives the TOTP encryption key and the
+	// JWT signing key, so it stays server-side only. The explicit json tag
+	// (rather than json:"-") is required for storm's JSON codec to persist
+	// the field; it is blanked in the user GET handlers like Password.
+	Salt string `json:"salt,omitempty" yaml:"-"`
 }
 
 // GetRules implements rules.Provider.
@@ -89,6 +97,17 @@ func (u *User) Clean(baseScope string, followExternalSymlinks bool, fields ...st
 				u.Rules = []rules.Rule{}
 			}
 		}
+	}
+
+	// New users (full Save) always get a fresh key-derivation salt. Updates
+	// with a field list skip this: existing users without a salt get one
+	// lazily on their next successful login (see auth.JSONAuth.Auth).
+	if u.Salt == "" && u.ID == 0 {
+		salt, err := GenerateSalt()
+		if err != nil {
+			return err
+		}
+		u.Salt = salt
 	}
 
 	if u.Fs == nil {

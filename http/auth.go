@@ -1,6 +1,7 @@
 package fbhttp
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"log"
@@ -115,8 +116,17 @@ func proxyAsserts(r *http.Request, d *data, id uint) bool {
 
 func withUser(fn handleFunc) handleFunc {
 	return func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+		key, ok := fbAuth.GetJWTKey()
+		if !ok {
+			// No admin has logged in yet since start (or the admin's
+			// credentials changed and cleared the key). Every request needs
+			// a valid JWT, and none can be issued or verified until the
+			// admin logs in and the key is (re)derived.
+			return http.StatusUnauthorized, nil
+		}
+
 		keyFunc := func(_ *jwt.Token) (interface{}, error) {
-			return d.settings.Key, nil
+			return key, nil
 		}
 
 		var tk authToken
@@ -175,6 +185,23 @@ func loginHandler(tokenExpireTime time.Duration) handleFunc {
 			return http.StatusPreconditionRequired, nil
 		case err != nil:
 			return http.StatusInternalServerError, err
+		}
+
+		// The JWT signing key is normally derived from the admin's password
+		// inside the auther (JSONAuth.Auth / HookAuth.Auth). Password-less
+		// auth methods (proxy) cannot derive it, so the first admin login
+		// seeds a random in-memory key. If no admin has ever logged in, no
+		// key exists and regular users cannot obtain a token.
+		if _, ok := fbAuth.GetJWTKey(); !ok {
+			if user.Perm.Admin {
+				key := make([]byte, 32)
+				if _, rerr := rand.Read(key); rerr != nil {
+					return http.StatusInternalServerError, rerr
+				}
+				fbAuth.SetJWTKey(key)
+			} else {
+				return http.StatusServiceUnavailable, errors.New("admin must log in first to initialize the session key")
+			}
 		}
 
 		return printToken(w, r, d, user, tokenExpireTime)
@@ -254,7 +281,7 @@ func renewHandler(tokenExpireTime time.Duration) handleFunc {
 	})
 }
 
-func printToken(w http.ResponseWriter, _ *http.Request, d *data, user *users.User, tokenExpirationTime time.Duration) (int, error) {
+func printToken(w http.ResponseWriter, _ *http.Request, _ *data, user *users.User, tokenExpirationTime time.Duration) (int, error) {
 	claims := &authToken{
 		User: userInfo{
 			ID:                    user.ID,
@@ -278,7 +305,13 @@ func printToken(w http.ResponseWriter, _ *http.Request, d *data, user *users.Use
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString(d.settings.Key)
+	key, ok := fbAuth.GetJWTKey()
+	if !ok {
+		// Should not happen: every path that issues tokens guarantees a key
+		// exists first. Guard anyway so a nil key never panics.
+		return http.StatusServiceUnavailable, errors.New("session key not initialized")
+	}
+	signed, err := token.SignedString(key)
 	if err != nil {
 		return http.StatusInternalServerError, err
 	}

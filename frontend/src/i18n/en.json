@@ -292,6 +292,8 @@
     "totpScanHint": "Scan this QR code with an authenticator app (Google Authenticator, 1Password, etc.), then enter the 6-digit code below.",
     "totpManualEntry": "Can't scan? Enter this key manually:",
     "totpCodePlaceholder": "6-digit code",
+    "totpPasswordHint": "Enter your current password to confirm:",
+    "totpPasswordPlaceholder": "Current password",
     "totpConfirm": "Verify & Enable",
     "totpEnabled": "Two-factor authentication is enabled for this user.",
     "totpDisable": "Disable",

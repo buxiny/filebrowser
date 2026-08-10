@@ -3,6 +3,7 @@ package cmd
 import (
 	"github.com/spf13/cobra"
 
+	fbAuth "github.com/filebrowser/filebrowser/v2/auth"
 	"github.com/filebrowser/filebrowser/v2/settings"
 	"github.com/filebrowser/filebrowser/v2/users"
 )
@@ -94,17 +95,39 @@ options you want to change.`,
 			user.Username = newUsername
 		}
 
+		credentialsChanged := false
 		if password != "" {
 			user.Password, err = users.ValidateAndHashPwd(password, s.MinimumPasswordLength)
 			if err != nil {
 				return err
 			}
+			credentialsChanged = true
+		}
+
+		if newUsername != "" && newUsername != user.Username {
+			credentialsChanged = true
+		}
+
+		// The TOTP secret is encrypted with a key derived from the user's
+		// password. The CLI does not have the old plaintext password, so a
+		// changed password makes the existing secret undecryptable: disable
+		// TOTP so the user re-enrolls, mirroring the API behavior for admin
+		// password resets.
+		if credentialsChanged && user.TOTPEnabled {
+			user.TOTPEnabled = false
+			user.TOTPSecret = ""
 		}
 
 		err = st.Users.Update(user)
 		if err != nil {
 			return err
 		}
+
+		// An admin credential change invalidates every derived JWT key.
+		if credentialsChanged && user.Perm.Admin {
+			fbAuth.ClearJWTKey()
+		}
+
 		printUsers([]*users.User{user})
 		return nil
 	}, storeOptions{}),

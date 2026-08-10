@@ -53,10 +53,17 @@ var totpEnrollHandler = withSelfOrAdmin(func(w http.ResponseWriter, r *http.Requ
 type totpVerifyRequest struct {
 	Secret string `json:"secret"`
 	Code   string `json:"code"`
+	// Password is the user's current plaintext password. It is required so
+	// the server can re-derive the per-user PBKDF2 key that encrypts the TOTP
+	// secret; the plaintext never leaves memory and nothing derived from it
+	// is ever stored.
+	Password string `json:"password"`
 }
 
 // totpVerifyHandler persists the pending TOTP secret once the user proves to
-// hold a valid authenticator code generated from it.
+// hold a valid authenticator code generated from it and knows the account
+// password (which both authorizes the change and provides the encryption
+// key).
 var totpVerifyHandler = withSelfOrAdmin(func(_ http.ResponseWriter, r *http.Request, d *data) (int, error) {
 	if r.Body == nil {
 		return http.StatusBadRequest, fberrors.ErrEmptyRequest
@@ -67,18 +74,22 @@ var totpVerifyHandler = withSelfOrAdmin(func(_ http.ResponseWriter, r *http.Requ
 		return http.StatusBadRequest, err
 	}
 
+	target, err := d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, d.raw.(uint))
+	if err != nil {
+		return errToStatus(err), err
+	}
+
+	if req.Password == "" || !users.CheckPwd(req.Password, target.Password) {
+		return http.StatusBadRequest, fberrors.ErrCurrentPasswordIncorrect
+	}
+
 	if !totp.Validate(req.Code, req.Secret) {
 		return http.StatusBadRequest, fberrors.ErrTOTPInvalid
 	}
 
-	encrypted, err := users.EncryptTOTPSecret(req.Secret, d.settings.Key)
+	encrypted, err := users.EncryptTOTPSecret(req.Secret, users.DeriveTOTPKey(req.Password, target.Salt))
 	if err != nil {
 		return http.StatusInternalServerError, err
-	}
-
-	target, err := d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, d.raw.(uint))
-	if err != nil {
-		return errToStatus(err), err
 	}
 
 	target.TOTPSecret = encrypted
@@ -91,12 +102,31 @@ var totpVerifyHandler = withSelfOrAdmin(func(_ http.ResponseWriter, r *http.Requ
 	return http.StatusOK, nil
 })
 
+type totpDisableRequest struct {
+	// Password is the user's current plaintext password, required so the
+	// change is authorized by the account holder.
+	Password string `json:"password"`
+}
+
 // totpDisableHandler removes the TOTP secret and disables two-factor auth for
-// a user.
-var totpDisableHandler = withSelfOrAdmin(func(_ http.ResponseWriter, _ *http.Request, d *data) (int, error) {
+// a user. The account password must be supplied to authorize the change.
+var totpDisableHandler = withSelfOrAdmin(func(_ http.ResponseWriter, r *http.Request, d *data) (int, error) {
+	if r.Body == nil {
+		return http.StatusBadRequest, fberrors.ErrEmptyRequest
+	}
+
+	var req totpDisableRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return http.StatusBadRequest, err
+	}
+
 	target, err := d.store.Users.Get(d.server.Root, d.server.FollowExternalSymlinks, d.raw.(uint))
 	if err != nil {
 		return errToStatus(err), err
+	}
+
+	if req.Password == "" || !users.CheckPwd(req.Password, target.Password) {
+		return http.StatusBadRequest, fberrors.ErrCurrentPasswordIncorrect
 	}
 
 	target.TOTPSecret = ""

@@ -18,6 +18,17 @@
           {{ t("settings.totpManualEntry") }}
           <code class="totp-secret">{{ enrollData?.secret }}</code>
         </p>
+        <p class="small">{{ t("settings.totpPasswordHint") }}</p>
+        <p>
+          <input
+            class="input"
+            type="password"
+            autocomplete="current-password"
+            v-model="password"
+            :placeholder="t('settings.totpPasswordPlaceholder')"
+            @keyup.enter="verify"
+          />
+        </p>
         <p>
           <input
             class="input"
@@ -32,7 +43,7 @@
           <button
             class="button button--flat"
             type="button"
-            :disabled="loading || code.length < 6"
+            :disabled="loading || code.length < 6 || !password"
             @click="verify"
           >
             {{ t("settings.totpConfirm") }}
@@ -64,14 +75,25 @@
     <!-- Enabled: show status + disable button -->
     <div v-else>
       <p class="small totp-enabled">{{ t("settings.totpEnabled") }}</p>
-      <button
-        class="button button--flat button--red"
-        type="button"
-        :disabled="loading"
-        @click="disable"
-      >
-        {{ t("settings.totpDisable") }}
-      </button>
+      <p class="small">{{ t("settings.totpPasswordHint") }}</p>
+      <p>
+        <input
+          class="input"
+          type="password"
+          autocomplete="current-password"
+          v-model="password"
+          :placeholder="t('settings.totpPasswordPlaceholder')"
+          @keyup.enter="disable"
+        />
+        <button
+          class="button button--flat button--red"
+          type="button"
+          :disabled="loading || !password"
+          @click="disable"
+        >
+          {{ t("settings.totpDisable") }}
+        </button>
+      </p>
     </div>
   </div>
 </template>
@@ -94,6 +116,7 @@ const loading = ref<boolean>(false);
 const pending = ref<boolean>(false);
 const enrollData = ref<ITOTPEnrollResult | null>(null);
 const code = ref<string>("");
+const password = ref<string>("");
 
 const showError = (e: unknown) => {
   $showError(e instanceof Error ? e : new Error(String(e)));
@@ -105,6 +128,7 @@ const enroll = async () => {
     enrollData.value = await api.totpEnroll(props.user.id);
     pending.value = true;
     code.value = "";
+    password.value = "";
   } catch (e) {
     showError(e);
   } finally {
@@ -113,15 +137,16 @@ const enroll = async () => {
 };
 
 const verify = async () => {
-  if (!enrollData.value || code.value.length < 6) {
+  if (!enrollData.value || code.value.length < 6 || !password.value) {
     return;
   }
   loading.value = true;
   try {
-    await api.totpVerify(props.user.id, enrollData.value.secret, code.value);
+    await api.totpVerify(props.user.id, enrollData.value.secret, code.value, password.value);
     pending.value = false;
     enrollData.value = null;
     code.value = "";
+    password.value = "";
     $showSuccess(t("settings.totpEnabledSuccess"));
     emit("changed");
   } catch (e) {
@@ -132,9 +157,13 @@ const verify = async () => {
 };
 
 const disable = async () => {
+  if (!password.value) {
+    return;
+  }
   loading.value = true;
   try {
-    await api.totpDisable(props.user.id);
+    await api.totpDisable(props.user.id, password.value);
+    password.value = "";
     $showSuccess(t("settings.totpDisabledSuccess"));
     emit("changed");
   } catch (e) {
@@ -148,6 +177,7 @@ const cancel = () => {
   pending.value = false;
   enrollData.value = null;
   code.value = "";
+  password.value = "";
 };
 </script>
 

@@ -86,6 +86,10 @@ func TestExpiredTokenNeedsProxyAssertion(t *testing.T) {
 	perm := users.Permissions{Download: true}
 	st := scopedUserStorage(t, t.TempDir(), perm, key)
 
+	// The test signs tokens itself; mirror the in-memory key cache that
+	// withUser verifies against (production derives this on admin login).
+	fbAuth.SetJWTKey(key)
+
 	if err := st.Settings.Save(&settings.Settings{
 		Key:        key,
 		AuthMethod: fbAuth.MethodProxyAuth,

@@ -20,13 +20,13 @@ import (
 	"github.com/filebrowser/filebrowser/v2/users"
 )
 
-// totpTestEnv builds a storage with one admin user (ID 1) using JSON auth and
-// a known signing key, mirroring a real deployment.
-func totpTestEnv(t *testing.T) (*storage.Storage, *settings.Server, []byte) {
+// totpTestEnv builds a storage with one admin user (ID 1) using JSON auth.
+// The user gets a fresh salt (as production does on save), and the derived
+// JWT key is cached so authenticated requests verify.
+func totpTestEnv(t *testing.T) (*storage.Storage, *settings.Server) {
 	t.Helper()
 
 	root := t.TempDir()
-	key := []byte("0123456789abcdef0123456789abcdef") // 32 bytes: AES-256
 
 	db, err := storm.Open(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
@@ -40,7 +40,7 @@ func totpTestEnv(t *testing.T) (*storage.Storage, *settings.Server, []byte) {
 	}
 
 	if err := st.Settings.Save(&settings.Settings{
-		Key:                   key,
+		Key:                   []byte("legacy-key-not-used-for-jwt-anymore"), // required by save validation; no longer used for signing
 		AuthMethod:            fbAuth.MethodJSONAuth,
 		MinimumPasswordLength: 1,
 	}); err != nil {
@@ -56,15 +56,23 @@ func totpTestEnv(t *testing.T) (*storage.Storage, *settings.Server, []byte) {
 		t.Fatalf("failed to hash password: %v", err)
 	}
 
-	if err := st.Users.Save(&users.User{
+	admin := &users.User{
 		Username: "u",
 		Password: pwd,
 		Perm:     users.Permissions{Admin: true},
-	}); err != nil {
+	}
+	if err := st.Users.Save(admin); err != nil {
 		t.Fatalf("failed to save user: %v", err)
 	}
+	if admin.Salt == "" {
+		t.Fatal("user must have a salt after Save")
+	}
 
-	return st, &settings.Server{Root: root}, key
+	// Cache the JWT key derived from the admin's credentials, as a real
+	// admin login would.
+	fbAuth.SetJWTKey(users.DeriveJWTKey(admin.Username, "test-password", admin.Salt))
+
+	return st, &settings.Server{Root: root}
 }
 
 // doAuthed performs a request against handler with a signed admin token.
@@ -110,9 +118,21 @@ func doLogin(t *testing.T, st *storage.Storage, server *settings.Server, usernam
 	return rec
 }
 
+// adminToken returns a signed admin token for the env's admin user. The JWT
+// key cache is already set by totpTestEnv; this re-derives and signs with the
+// same key that withUser will verify against.
+func adminToken(t *testing.T) string {
+	t.Helper()
+	key, ok := fbAuth.GetJWTKey()
+	if !ok {
+		t.Fatal("JWT key not cached")
+	}
+	return signToken(t, users.Permissions{Admin: true}, key)
+}
+
 func TestTOTPFullFlow(t *testing.T) {
-	st, server, key := totpTestEnv(t)
-	adminToken := signToken(t, users.Permissions{Admin: true}, key)
+	st, server := totpTestEnv(t)
+	tok := adminToken(t)
 
 	// Register routes under a real router so mux.Vars populates {id}.
 	muxRouter := mux.NewRouter()
@@ -122,19 +142,19 @@ func TestTOTPFullFlow(t *testing.T) {
 	muxRouter.Handle("/users/{id:[0-9]+}/totp/disable", handle(totpDisableHandler, "", st, server)).Methods("POST")
 
 	getUser := func() *httptest.ResponseRecorder {
-		return doAuthed(t, muxRouter, http.MethodGet, "/users/1", "", adminToken)
+		return doAuthed(t, muxRouter, http.MethodGet, "/users/1", "", tok)
 	}
 	enroll := func() *httptest.ResponseRecorder {
-		return doAuthed(t, muxRouter, http.MethodPost, "/users/1/totp/enroll", "", adminToken)
+		return doAuthed(t, muxRouter, http.MethodPost, "/users/1/totp/enroll", "", tok)
 	}
 	verify := func(body string) *httptest.ResponseRecorder {
-		return doAuthed(t, muxRouter, http.MethodPost, "/users/1/totp/verify", body, adminToken)
+		return doAuthed(t, muxRouter, http.MethodPost, "/users/1/totp/verify", body, tok)
 	}
-	disable := func() *httptest.ResponseRecorder {
-		return doAuthed(t, muxRouter, http.MethodPost, "/users/1/totp/disable", "", adminToken)
+	disable := func(body string) *httptest.ResponseRecorder {
+		return doAuthed(t, muxRouter, http.MethodPost, "/users/1/totp/disable", body, tok)
 	}
 
-	// TOTP must be off by default.
+	// TOTP must be off by default and the salt must not leak to clients.
 	if rec := getUser(); rec.Code != http.StatusOK {
 		t.Fatalf("get user: %d body=%q", rec.Code, rec.Body.String())
 	} else {
@@ -144,6 +164,12 @@ func TestTOTPFullFlow(t *testing.T) {
 		}
 		if u.TOTPEnabled {
 			t.Fatal("TOTP must be disabled by default")
+		}
+		if u.Salt != "" {
+			t.Fatal("salt must never be exposed to clients")
+		}
+		if u.TOTPSecret != "" {
+			t.Fatal("totpSecret must never be exposed to clients")
 		}
 	}
 
@@ -173,22 +199,33 @@ func TestTOTPFullFlow(t *testing.T) {
 		t.Fatal("enroll must not persist the secret until verify")
 	}
 
-	// 2. Verify with a wrong code is rejected.
+	// 2. Verify without password is rejected.
 	rec = verify(`{"secret":"` + enrolled.Secret + `","code":"000000"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("verify no password: want 400, got %d body=%q", rec.Code, rec.Body.String())
+	}
+
+	// 3. Verify with wrong password is rejected.
+	rec = verify(`{"secret":"` + enrolled.Secret + `","code":"000000","password":"wrong"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("verify wrong password: want 400, got %d", rec.Code)
+	}
+
+	// 4. Verify with a wrong code is rejected.
+	rec = verify(`{"secret":"` + enrolled.Secret + `","code":"000000","password":"test-password"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("verify wrong code: want 400, got %d", rec.Code)
 	}
 
-	// 3. Verify with a valid code enables TOTP.
+	// 5. Verify with a valid code and correct password enables TOTP.
 	code, err := totp.GenerateCode(enrolled.Secret, time.Now())
 	if err != nil {
 		t.Fatalf("generate code: %v", err)
 	}
-	// Sanity: the same library call the server makes must pass locally.
 	if ok := totp.Validate(code, enrolled.Secret); !ok {
 		t.Fatal("sanity check failed: valid code rejected locally")
 	}
-	body := `{"secret":"` + enrolled.Secret + `","code":"` + code + `"}`
+	body := `{"secret":"` + enrolled.Secret + `","code":"` + code + `","password":"test-password"}`
 	t.Logf("verify body: %s", body)
 	rec = verify(body)
 	if rec.Code != http.StatusOK {
@@ -207,17 +244,17 @@ func TestTOTPFullFlow(t *testing.T) {
 		t.Fatal("TOTP secret must be stored encrypted, not in plaintext")
 	}
 
-	// 4. Login without a code: 428, second factor required.
+	// 6. Login without a code: 428, second factor required.
 	if rec := doLogin(t, st, server, "u", "test-password", ""); rec.Code != http.StatusPreconditionRequired {
 		t.Fatalf("login without TOTP: want 428, got %d body=%q", rec.Code, rec.Body.String())
 	}
 
-	// 5. Login with a wrong code: 403 (same as wrong password, no enumeration).
+	// 7. Login with a wrong code: 403 (same as wrong password, no enumeration).
 	if rec := doLogin(t, st, server, "u", "test-password", "000000"); rec.Code != http.StatusForbidden {
 		t.Fatalf("login with wrong TOTP: want 403, got %d", rec.Code)
 	}
 
-	// 6. Login with a valid code: success.
+	// 8. Login with a valid code: success.
 	code, err = totp.GenerateCode(enrolled.Secret, time.Now())
 	if err != nil {
 		t.Fatalf("generate code: %v", err)
@@ -226,14 +263,26 @@ func TestTOTPFullFlow(t *testing.T) {
 		t.Fatalf("login with valid TOTP: want 200, got %d body=%q", rec.Code, rec.Body.String())
 	}
 
-	// 7. Wrong password stays rejected even with a valid code.
+	// 9. Wrong password stays rejected even with a valid code.
 	code, _ = totp.GenerateCode(enrolled.Secret, time.Now())
 	if rec := doLogin(t, st, server, "u", "wrong-password", code); rec.Code != http.StatusForbidden {
 		t.Fatalf("login with wrong password + valid TOTP: want 403, got %d", rec.Code)
 	}
 
-	// 8. Disable: TOTP no longer required.
-	rec = disable()
+	// 10. Disable without password is rejected.
+	rec = disable(`{}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("disable no password: want 400, got %d", rec.Code)
+	}
+
+	// 11. Disable with wrong password is rejected.
+	rec = disable(`{"password":"wrong"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("disable wrong password: want 400, got %d", rec.Code)
+	}
+
+	// 12. Disable with correct password: TOTP no longer required.
+	rec = disable(`{"password":"test-password"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("disable: %d body=%q", rec.Code, rec.Body.String())
 	}
@@ -244,12 +293,11 @@ func TestTOTPFullFlow(t *testing.T) {
 }
 
 // TestTOTPSecretEncryptionRoundTrip verifies the AES-GCM helpers directly,
-// including with a real 512-bit settings key (settings.GenerateKey length).
+// including with the PBKDF2-derived keys used in production.
 func TestTOTPSecretEncryptionRoundTrip(t *testing.T) {
 	cases := [][]byte{
-		[]byte("0123456789abcdef0123456789abcdef"),                                 // 32 bytes
-		[]byte("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"), // 64 bytes (GenerateKey)
-		[]byte("short"), // arbitrary length
+		users.DeriveTOTPKey("test-password", "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"),
+		[]byte("short"), // arbitrary length is still fine (sha256 derivation)
 	}
 	for _, key := range cases {
 		secret := "JBSWY3DPEHPK3PXP"
@@ -272,12 +320,12 @@ func TestTOTPSecretEncryptionRoundTrip(t *testing.T) {
 	}
 
 	// Wrong key must fail.
-	key := []byte("0123456789abcdef0123456789abcdef0123456789abcdef")
+	key := users.DeriveTOTPKey("test-password", "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
 	enc, err := users.EncryptTOTPSecret("JBSWY3DPEHPK3PXP", key)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
-	if _, err := users.DecryptTOTPSecret(enc, []byte("fedcba9876543210fedcba9876543210")); err == nil {
+	if _, err := users.DecryptTOTPSecret(enc, users.DeriveTOTPKey("other-password", "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")); err == nil {
 		t.Fatal("decrypt with wrong key must fail")
 	}
 
@@ -285,5 +333,39 @@ func TestTOTPSecretEncryptionRoundTrip(t *testing.T) {
 	enc, err = users.EncryptTOTPSecret("", key)
 	if err != nil || enc != "" {
 		t.Fatalf("empty secret: enc=%q err=%v", enc, err)
+	}
+}
+
+// TestSaltKeyDerivation verifies the PBKDF2 derivation primitives that back
+// the TOTP and JWT keys: same inputs → same key, different password or salt
+// → different key, and TOTP/JWT purposes produce distinct keys.
+func TestSaltKeyDerivation(t *testing.T) {
+	salt := "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+
+	totpKey := users.DeriveTOTPKey("secret-password", salt)
+	if len(totpKey) != 32 {
+		t.Fatalf("TOTP key length = %d, want 32", len(totpKey))
+	}
+	if !strings.EqualFold(string(users.DeriveTOTPKey("secret-password", salt)), string(totpKey)) {
+		t.Fatal("deterministic derivation must reproduce the same key")
+	}
+	if string(users.DeriveTOTPKey("different-password", salt)) == string(totpKey) {
+		t.Fatal("different password must derive a different key")
+	}
+	if string(users.DeriveTOTPKey("secret-password", "another-salt")) == string(totpKey) {
+		t.Fatal("different salt must derive a different key")
+	}
+
+	jwtKey := users.DeriveJWTKey("admin", "secret-password", salt)
+	if len(jwtKey) != 32 {
+		t.Fatalf("JWT key length = %d, want 32", len(jwtKey))
+	}
+	if string(jwtKey) == string(totpKey) {
+		t.Fatal("TOTP and JWT purposes must derive distinct keys from the same salt")
+	}
+
+	// The JWT key binds the username too: a renamed admin gets a new key.
+	if string(users.DeriveJWTKey("renamed-admin", "secret-password", salt)) == string(jwtKey) {
+		t.Fatal("different username must derive a different JWT key")
 	}
 }

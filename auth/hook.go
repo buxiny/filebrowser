@@ -64,7 +64,7 @@ func (a *HookAuth) Auth(r *http.Request, usr users.Store, stg *settings.Settings
 		if err != nil {
 			return nil, err
 		}
-		return u, nil
+		return a.withJWTKey(u, cred, usr), nil
 	case "block":
 		return nil, os.ErrPermission
 	case "pass":
@@ -72,10 +72,20 @@ func (a *HookAuth) Auth(r *http.Request, usr users.Store, stg *settings.Settings
 		if err != nil || !users.CheckPwd(a.Cred.Password, u.Password) {
 			return nil, os.ErrPermission
 		}
-		return u, nil
+		return a.withJWTKey(u, cred, usr), nil
 	default:
 		return nil, fmt.Errorf("invalid hook action: %s", action)
 	}
+}
+
+// withJWTKey derives and caches the JWT signing key when the authenticated
+// user is an admin (the same rule as JSONAuth.Auth). The password is the
+// plaintext submitted to the hook, which is available on this path.
+func (a *HookAuth) withJWTKey(u *users.User, cred hookCred, _ users.Store) *users.User {
+	if u.Perm.Admin {
+		SetJWTKey(users.DeriveJWTKey(u.Username, cred.Password, u.Salt))
+	}
+	return u
 }
 
 // LoginPage tells that hook auth requires a login page.

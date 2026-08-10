@@ -74,13 +74,43 @@ func (a JSONAuth) Auth(r *http.Request, usr users.Store, stg *settings.Settings,
 		return nil, os.ErrPermission
 	}
 
+	// Every user must have a salt for the PBKDF2 key derivation. Users
+	// created before salts existed (older builds of this fork) get one
+	// generated lazily on first successful login. If such a user already had
+	// a TOTP secret, it was encrypted with the old settings key and cannot be
+	// decrypted with the newly derived key, so the secret is migrated by
+	// re-encrypting it with the fresh key; a secret that fails even the old
+	// decryption is dropped and TOTP disabled (the user must re-enroll).
+	if u.Salt == "" {
+		salt, serr := users.GenerateSalt()
+		if serr != nil {
+			return nil, serr
+		}
+		u.Salt = salt
+		if u.TOTPEnabled && u.TOTPSecret != "" {
+			// Try the legacy settings-key encryption first.
+			if legacy, derr := users.DecryptTOTPSecret(u.TOTPSecret, stg.Key); derr == nil {
+				if enc, eerr := users.EncryptTOTPSecret(legacy, users.DeriveTOTPKey(cred.Password, u.Salt)); eerr == nil {
+					u.TOTPSecret = enc
+				} else {
+					u.TOTPEnabled, u.TOTPSecret = false, ""
+				}
+			} else {
+				u.TOTPEnabled, u.TOTPSecret = false, ""
+			}
+		}
+		if uerr := usr.Update(u, "Salt", "TOTPSecret", "TOTPEnabled"); uerr != nil {
+			return nil, uerr
+		}
+	}
+
 	// If the user has TOTP enabled, require a valid code on top of the
 	// password. A missing code is reported as ErrTOTPRequired so the API can
 	// answer 428 and let the client perform the second step; a wrong code
 	// degrades to the same error as a wrong password to avoid user
 	// enumeration.
 	if u.TOTPEnabled && u.TOTPSecret != "" {
-		secret, derr := users.DecryptTOTPSecret(u.TOTPSecret, stg.Key)
+		secret, derr := users.DecryptTOTPSecret(u.TOTPSecret, users.DeriveTOTPKey(cred.Password, u.Salt))
 		if derr != nil {
 			return nil, os.ErrPermission
 		}
@@ -92,6 +122,14 @@ func (a JSONAuth) Auth(r *http.Request, usr users.Store, stg *settings.Settings,
 		if !totp.Validate(cred.TOTP, secret) {
 			return nil, os.ErrPermission
 		}
+	}
+
+	// Admins derive and cache the JWT signing key. It depends on the
+	// admin's username, password and salt; because the salt is per-user and
+	// the passphrase is the admin's, the derived key is unique to this
+	// deployment and changes whenever the admin's credentials change.
+	if u.Perm.Admin {
+		SetJWTKey(users.DeriveJWTKey(u.Username, cred.Password, u.Salt))
 	}
 
 	return u, nil
